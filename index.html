@@ -148,6 +148,7 @@
 
     <div class="actions">
       <button id="btnStart" class="btn-start">開始導讀並錄音</button>
+      <button id="btnMicOnly" class="btn-start" style="background:#475569;">純錄音測試（不播語音）</button>
       <button id="btnReread" class="btn-reread" disabled>重新朗讀（不中斷錄音）</button>
       <button id="btnStop" class="btn-stop" disabled>錄音完畢</button>
     </div>
@@ -166,6 +167,7 @@
 
   <script>
     const btnStart = document.getElementById('btnStart');
+    const btnMicOnly = document.getElementById('btnMicOnly');
     const btnReread = document.getElementById('btnReread');
     const btnStop = document.getElementById('btnStop');
     const btnFallbackPlay = document.getElementById('btnFallbackPlay');
@@ -263,8 +265,8 @@
       window.speechSynthesis.speak(utterance);
     }
 
-    btnStart.addEventListener('click', async () => {
-      logBox.textContent = '初始化中...';
+    async function startSession(withSpeech) {
+      logBox.textContent = withSpeech ? '初始化中（導讀＋錄音）...' : '初始化中（純錄音對照測試）...';
       resultBox.classList.remove('show');
       if (audioPlayer.src) {
         URL.revokeObjectURL(audioPlayer.src);
@@ -279,7 +281,7 @@
 
       try {
         // 先同步呼叫 speak() 解鎖 iPadOS/iOS Safari 的語音播放手勢權限，避免 await getUserMedia 後被阻擋
-        if ('speechSynthesis' in window) {
+        if (withSpeech && 'speechSynthesis' in window) {
           window.speechSynthesis.cancel();
           const unlockUtterance = new SpeechSynthesisUtterance('');
           unlockUtterance.volume = 0;
@@ -353,16 +355,24 @@
         mediaRecorder.start();
 
         btnStart.disabled = true;
-        btnReread.disabled = false;
+        btnMicOnly.disabled = true;
+        btnReread.disabled = !withSpeech;
         btnStop.disabled = false;
-        setStatus('錄音進行中（AI 導讀＋現場收音）', true);
+        setStatus(withSpeech ? '錄音進行中（AI 導讀＋現場收音）' : '純錄音進行中（對照測試）', true);
 
-        speakQuestion();
+        if (withSpeech) {
+          speakQuestion();
+        } else {
+          log('純錄音模式：請對著麥克風講話 5~10 秒後按「錄音完畢」');
+        }
       } catch (err) {
         log(`啟動失敗: ${err.name} - ${err.message}`);
         alert(`無法啟動錄音：${err.message}`);
       }
-    });
+    }
+
+    btnStart.addEventListener('click', () => startSession(true));
+    btnMicOnly.addEventListener('click', () => startSession(false));
 
     audioPlayer.addEventListener('error', () => {
       const err = audioPlayer.error;
@@ -418,6 +428,7 @@
       }
 
       btnStart.disabled = false;
+      btnMicOnly.disabled = false;
       btnReread.disabled = true;
       btnStop.disabled = true;
     });
