@@ -155,7 +155,10 @@
     <div id="resultBox" class="result-box">
       <h2>錄音完成，請播放確認 AI 聲音與麥克風人聲是否清晰：</h2>
       <audio id="audioPlayer" controls playsinline></audio>
-      <a id="downloadLink" class="download-link" href="#" download="test-recording.webm">下載錄音檔</a>
+      <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        <button id="btnFallbackPlay" class="btn-start" type="button" style="flex:0 0 auto; padding:10px 16px; font-size:0.9rem;">用 Web Audio 直接解碼播放</button>
+        <a id="downloadLink" class="download-link" href="#" download="test-recording.webm">下載錄音檔</a>
+      </div>
     </div>
 
     <div class="log-box" id="logBox">等待操作...</div>
@@ -165,6 +168,7 @@
     const btnStart = document.getElementById('btnStart');
     const btnReread = document.getElementById('btnReread');
     const btnStop = document.getElementById('btnStop');
+    const btnFallbackPlay = document.getElementById('btnFallbackPlay');
     const statusBadge = document.getElementById('statusBadge');
     const statusText = document.getElementById('statusText');
     const questionText = document.getElementById('questionText').textContent.trim();
@@ -176,6 +180,7 @@
     let mediaRecorder = null;
     let micStream = null;
     let recordedChunks = [];
+    let lastRecordedBlob = null;
     let currentUtterance = null; // 保留參考避免被 Chrome GC 回收導致 onend 失效
     let wakeLock = null;
     let selectedMimeType = '';
@@ -316,14 +321,23 @@
         mediaRecorder.onstop = () => {
           const finalType = mediaRecorder.mimeType || selectedMimeType || 'audio/mp4';
           const blob = new Blob(recordedChunks, { type: finalType });
-          const url = URL.createObjectURL(blob);
+          lastRecordedBlob = blob;
+
+          const blobUrl = URL.createObjectURL(blob);
           const ext = finalType.includes('mp4') || finalType.includes('aac') ? 'm4a' : 'webm';
           const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
 
-          audioPlayer.src = url;
-          audioPlayer.load();
-          downloadLink.href = url;
+          downloadLink.href = blobUrl;
           downloadLink.download = `recording-test.${ext}`;
+
+          // 行動版瀏覽器常對 blob: URL 支援不佳，改用 FileReader 轉成 data: URL 給 <audio>
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            audioPlayer.src = reader.result;
+            audioPlayer.load();
+          };
+          reader.readAsDataURL(blob);
+
           resultBox.classList.add('show');
 
           if (micStream) {
@@ -347,6 +361,38 @@
       } catch (err) {
         log(`啟動失敗: ${err.name} - ${err.message}`);
         alert(`無法啟動錄音：${err.message}`);
+      }
+    });
+
+    audioPlayer.addEventListener('error', () => {
+      const err = audioPlayer.error;
+      log(`播放器錯誤: code=${err ? err.code : 'unknown'}, message=${err ? err.message : ''}`);
+    });
+
+    btnFallbackPlay.addEventListener('click', async () => {
+      if (!lastRecordedBlob) {
+        log('沒有可播放的錄音資料');
+        return;
+      }
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioCtx();
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+        const arrayBuffer = await lastRecordedBlob.arrayBuffer();
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        source.onended = () => {
+          log('Web Audio 播放結束');
+          ctx.close().catch(() => {});
+        };
+        source.start(0);
+        log(`Web Audio 解碼播放中（實際音訊時長: ${audioBuffer.duration.toFixed(1)} 秒）`);
+      } catch (err) {
+        log(`Web Audio 解碼失敗: ${err.name} - ${err.message}`);
       }
     });
 
