@@ -239,13 +239,15 @@
       const utterance = new SpeechSynthesisUtterance(questionText);
       utterance.lang = 'zh-TW';
       utterance.rate = 1.0;
+      utterance.volume = 1.0;
 
+      const allVoices = window.speechSynthesis.getVoices();
       const voice = pickTaiwanVoice();
       if (voice) {
         utterance.voice = voice;
-        log(`開始朗讀，使用語音：${voice.name} (${voice.lang})`);
+        log(`開始朗讀（總語音數: ${allVoices.length}），使用語音：${voice.name} (${voice.lang})`);
       } else {
-        log('開始朗讀，使用系統預設語音 (zh-TW)');
+        log(`開始朗讀（總語音數: ${allVoices.length}），使用系統預設語音 (zh-TW)`);
       }
 
       utterance.onstart = () => log('語音播放中...');
@@ -271,9 +273,12 @@
       }
 
       try {
-        // 先同步喚醒一次 speechSynthesis，避免 iPad 權限彈窗後失去點擊手勢
+        // 先同步呼叫 speak() 解鎖 iPadOS/iOS Safari 的語音播放手勢權限，避免 await getUserMedia 後被阻擋
         if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
+          const unlockUtterance = new SpeechSynthesisUtterance('');
+          unlockUtterance.volume = 0;
+          window.speechSynthesis.speak(unlockUtterance);
         }
 
         // 關閉回音消除與降噪，盡量讓麥克風能側錄到喇叭播出的 AI 聲音
