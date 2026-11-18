@@ -149,6 +149,7 @@
     <div class="actions">
       <button id="btnStart" class="btn-start">開始導讀並錄音</button>
       <button id="btnMicOnly" class="btn-start" style="background:#475569;">純錄音測試（不播語音）</button>
+      <button id="btnAudioCtxMix" class="btn-start" style="background:#7c3aed;">AudioContext 混音錄製測試</button>
       <button id="btnReread" class="btn-reread" disabled>重新朗讀（不中斷錄音）</button>
       <button id="btnStop" class="btn-stop" disabled>錄音完畢</button>
     </div>
@@ -168,6 +169,7 @@
   <script>
     const btnStart = document.getElementById('btnStart');
     const btnMicOnly = document.getElementById('btnMicOnly');
+    const btnAudioCtxMix = document.getElementById('btnAudioCtxMix');
     const btnReread = document.getElementById('btnReread');
     const btnStop = document.getElementById('btnStop');
     const btnFallbackPlay = document.getElementById('btnFallbackPlay');
@@ -181,6 +183,7 @@
 
     let mediaRecorder = null;
     let micStream = null;
+    let activeAudioCtx = null;
     let recordedChunks = [];
     let lastRecordedBlob = null;
     let currentUtterance = null; // 保留參考避免被 Chrome GC 回收導致 onend 失效
@@ -307,55 +310,11 @@
           }
         }
 
-        recordedChunks = [];
-        selectedMimeType = getSupportedMimeType();
-        const options = selectedMimeType ? { mimeType: selectedMimeType } : undefined;
-        mediaRecorder = new MediaRecorder(micStream, options);
-
-        log(`錄音啟動，格式: ${mediaRecorder.mimeType || '瀏覽器預設'}`);
-
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            recordedChunks.push(event.data);
-          }
-        };
-
-        mediaRecorder.onstop = () => {
-          const finalType = mediaRecorder.mimeType || selectedMimeType || 'audio/mp4';
-          const blob = new Blob(recordedChunks, { type: finalType });
-          lastRecordedBlob = blob;
-
-          const blobUrl = URL.createObjectURL(blob);
-          const ext = finalType.includes('mp4') || finalType.includes('aac') ? 'm4a' : 'webm';
-          const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
-
-          downloadLink.href = blobUrl;
-          downloadLink.download = `recording-test.${ext}`;
-
-          // 行動版瀏覽器常對 blob: URL 支援不佳，改用 FileReader 轉成 data: URL 給 <audio>
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            audioPlayer.src = reader.result;
-            audioPlayer.load();
-          };
-          reader.readAsDataURL(blob);
-
-          resultBox.classList.add('show');
-
-          if (micStream) {
-            micStream.getTracks().forEach(track => track.stop());
-            micStream = null;
-          }
-
-          log(`錄音已結束：分段數 ${recordedChunks.length}，時長約 ${durationSec} 秒，檔案大小 ${(blob.size / 1024).toFixed(1)} KB (${finalType})`);
-          setStatus('錄音完成', false);
-        };
-
-        startTime = Date.now();
-        mediaRecorder.start();
+        setupAndStartRecorder(micStream);
 
         btnStart.disabled = true;
         btnMicOnly.disabled = true;
+        btnAudioCtxMix.disabled = true;
         btnReread.disabled = !withSpeech;
         btnStop.disabled = false;
         setStatus(withSpeech ? '錄音進行中（AI 導讀＋現場收音）' : '純錄音進行中（對照測試）', true);
@@ -371,8 +330,147 @@
       }
     }
 
+    function setupAndStartRecorder(targetStream) {
+      recordedChunks = [];
+      selectedMimeType = getSupportedMimeType();
+      const options = selectedMimeType ? { mimeType: selectedMimeType } : undefined;
+      mediaRecorder = new MediaRecorder(targetStream, options);
+
+      log(`錄音啟動，格式: ${mediaRecorder.mimeType || '瀏覽器預設'}`);
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const finalType = mediaRecorder.mimeType || selectedMimeType || 'audio/mp4';
+        const blob = new Blob(recordedChunks, { type: finalType });
+        lastRecordedBlob = blob;
+
+        const blobUrl = URL.createObjectURL(blob);
+        const ext = finalType.includes('mp4') || finalType.includes('aac') ? 'm4a' : 'webm';
+        const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
+
+        downloadLink.href = blobUrl;
+        downloadLink.download = `recording-test.${ext}`;
+
+        // 行動版瀏覽器常對 blob: URL 支援不佳，改用 FileReader 轉成 data: URL 給 <audio>
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          audioPlayer.src = reader.result;
+          audioPlayer.load();
+        };
+        reader.readAsDataURL(blob);
+
+        resultBox.classList.add('show');
+
+        if (micStream) {
+          micStream.getTracks().forEach(track => track.stop());
+          micStream = null;
+        }
+        if (activeAudioCtx) {
+          activeAudioCtx.close().catch(() => {});
+          activeAudioCtx = null;
+        }
+
+        log(`錄音已結束：分段數 ${recordedChunks.length}，時長約 ${durationSec} 秒，檔案大小 ${(blob.size / 1024).toFixed(1)} KB (${finalType})`);
+        setStatus('錄音完成', false);
+      };
+
+      startTime = Date.now();
+      mediaRecorder.start();
+    }
+
+    // 合成一段 3 秒的示範音訊 Buffer（模擬從靜態 MP3 解碼出來的 AI 語音）
+    function createChimeBuffer(ctx) {
+      const sampleRate = ctx.sampleRate;
+      const durationSec = 3.0;
+      const buffer = ctx.createBuffer(1, sampleRate * durationSec, sampleRate);
+      const data = buffer.getChannelData(0);
+      const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+
+      for (let i = 0; i < data.length; i++) {
+        const t = i / sampleRate;
+        const noteIndex = Math.min(Math.floor(t / 0.75), notes.length - 1);
+        const localT = t - noteIndex * 0.75;
+        const envelope = Math.exp(-localT * 3.5); // 平滑衰減避免爆音
+        data[i] = Math.sin(2 * Math.PI * notes[noteIndex] * t) * 0.25 * envelope;
+      }
+      return buffer;
+    }
+
+    async function startAudioContextMixSession() {
+      logBox.textContent = '初始化中（AudioContext 數位混音測試）...';
+      resultBox.classList.remove('show');
+      if (audioPlayer.src) {
+        URL.revokeObjectURL(audioPlayer.src);
+        audioPlayer.removeAttribute('src');
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        log('錯誤：無法存取麥克風。請確認網址為 HTTPS 或 localhost！');
+        alert('無法存取麥克風，請確認網頁是透過 HTTPS 或 localhost 開啟。');
+        return;
+      }
+
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        activeAudioCtx = new AudioCtx();
+        if (activeAudioCtx.state === 'suspended') {
+          await activeAudioCtx.resume();
+        }
+
+        // 數位混音可正常開啟回音消除，避免喇叭音重複被麥克風收進去
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        log('已取得麥克風權限（echoCancellation: true）');
+
+        if ('wakeLock' in navigator) {
+          try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            log('已啟用螢幕常亮 (Wake Lock)');
+          } catch (err) {
+            log(`Wake Lock 未啟用: ${err.message}`);
+          }
+        }
+
+        const mixDest = activeAudioCtx.createMediaStreamDestination();
+        const micSource = activeAudioCtx.createMediaStreamSource(micStream);
+        micSource.connect(mixDest); // 麥克風只接進混音錄音軌，不接喇叭避免嘯叫
+
+        setupAndStartRecorder(mixDest.stream);
+
+        // 播放合成音訊（同時接喇叭與混音錄音軌）
+        const chimeSource = activeAudioCtx.createBufferSource();
+        chimeSource.buffer = createChimeBuffer(activeAudioCtx);
+        chimeSource.connect(activeAudioCtx.destination);
+        chimeSource.connect(mixDest);
+        chimeSource.onended = () => log('示範音訊播放完畢（麥克風持續錄音中，請講幾句話後按「錄音完畢」）');
+        chimeSource.start(0);
+        log('AudioContext 正在播放示範提示音，並與麥克風同步數位混音錄製中...');
+
+        btnStart.disabled = true;
+        btnMicOnly.disabled = true;
+        btnAudioCtxMix.disabled = true;
+        btnReread.disabled = true;
+        btnStop.disabled = false;
+        setStatus('AudioContext 數位混音錄音中', true);
+      } catch (err) {
+        log(`混音啟動失敗: ${err.name} - ${err.message}`);
+        alert(`無法啟動混音錄音：${err.message}`);
+      }
+    }
+
     btnStart.addEventListener('click', () => startSession(true));
     btnMicOnly.addEventListener('click', () => startSession(false));
+    btnAudioCtxMix.addEventListener('click', startAudioContextMixSession);
 
     audioPlayer.addEventListener('error', () => {
       const err = audioPlayer.error;
@@ -429,6 +527,7 @@
 
       btnStart.disabled = false;
       btnMicOnly.disabled = false;
+      btnAudioCtxMix.disabled = false;
       btnReread.disabled = true;
       btnStop.disabled = true;
     });
