@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>行動投保 AI 導讀與同步錄音測試（解法二 PoC）</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --danger: #dc2626;
+      --success: #16a34a;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      background: var(--card);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 12px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.875rem;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      color: #334155;
+      margin-bottom: 16px;
+    }
+    .badge.recording {
+      background: #fee2e2;
+      color: var(--danger);
+      font-weight: 600;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .badge.recording .dot {
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+    .question-box {
+      background: #eff6ff;
+      border-left: 4px solid var(--primary);
+      padding: 16px 20px;
+      border-radius: 8px;
+      font-size: 1.15rem;
+      font-weight: 500;
+      margin-bottom: 20px;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    button {
+      flex: 1 1 180px;
+      padding: 14px 20px;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.05s;
+    }
+    button:active { transform: scale(0.98); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-start { background: var(--primary); color: #fff; }
+    .btn-stop { background: var(--danger); color: #fff; }
+    .btn-reread { background: #0f766e; color: #fff; }
+
+    .result-box {
+      display: none;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      padding: 16px;
+      background: #f1f5f9;
+      margin-bottom: 20px;
+    }
+    .result-box.show { display: block; }
+    .result-box h2 {
+      font-size: 1rem;
+      margin: 0 0 10px;
+      color: var(--success);
+    }
+    audio {
+      width: 100%;
+      margin-bottom: 10px;
+    }
+    .download-link {
+      display: inline-block;
+      color: var(--primary);
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .log-box {
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+      padding: 12px;
+      border-radius: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>AI 導讀與背景錄音測試（Web Speech + 麥克風側錄）</h1>
+
+    <div id="statusBadge" class="badge">
+      <span class="dot"></span>
+      <span id="statusText">待機中</span>
+    </div>
+
+    <div class="question-box" id="questionText">
+      本保單相關人員年齡是否有已達65歲(含)以上者，且經評估確認具有辨識不利其投保權益情形之能力且投保之保險商品適合該客戶，並作成評估紀錄？
+    </div>
+
+    <div class="actions">
+      <button id="btnStart" class="btn-start">開始導讀並錄音</button>
+      <button id="btnReread" class="btn-reread" disabled>重新朗讀（不中斷錄音）</button>
+      <button id="btnStop" class="btn-stop" disabled>錄音完畢</button>
+    </div>
+
+    <div id="resultBox" class="result-box">
+      <h2>錄音完成，請播放確認 AI 聲音與麥克風人聲是否清晰：</h2>
+      <audio id="audioPlayer" controls playsinline></audio>
+      <a id="downloadLink" class="download-link" href="#" download="test-recording.webm">下載錄音檔</a>
+    </div>
+
+    <div class="log-box" id="logBox">等待操作...</div>
+  </div>
+
+  <script>
+    const btnStart = document.getElementById('btnStart');
+    const btnReread = document.getElementById('btnReread');
+    const btnStop = document.getElementById('btnStop');
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const questionText = document.getElementById('questionText').textContent.trim();
+    const resultBox = document.getElementById('resultBox');
+    const audioPlayer = document.getElementById('audioPlayer');
+    const downloadLink = document.getElementById('downloadLink');
+    const logBox = document.getElementById('logBox');
+
+    let mediaRecorder = null;
+    let micStream = null;
+    let recordedChunks = [];
+    let currentUtterance = null; // 保留參考避免被 Chrome GC 回收導致 onend 失效
+    let wakeLock = null;
+    let selectedMimeType = '';
+    let startTime = 0;
+
+    function log(msg) {
+      const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+      logBox.textContent += `\n[${time}] ${msg}`;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function setStatus(text, isRecording) {
+      statusText.textContent = text;
+      statusBadge.classList.toggle('recording', isRecording);
+    }
+
+    function getSupportedMimeType() {
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/aac'
+      ];
+      if (!window.MediaRecorder) return '';
+      for (const type of candidates) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          return type;
+        }
+      }
+      return '';
+    }
+
+    function pickTaiwanVoice() {
+      const voices = window.speechSynthesis.getVoices();
+      // 優先挑選 zh-TW 或 zh_TW，且優先選本機語音 (localService) 減少 Chrome 長句中斷問題
+      const twVoices = voices.filter(v =>
+        v.lang.toLowerCase() === 'zh-tw' || v.lang.toLowerCase() === 'zh_tw'
+      );
+      if (twVoices.length > 0) {
+        return twVoices.find(v => v.localService) || twVoices[0];
+      }
+      return voices.find(v => v.lang.toLowerCase().startsWith('zh')) || null;
+    }
+
+    // 預載語音清單（Chrome/Edge 需要 voiceschanged 事件，Safari 則是同步）
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices();
+      window.speechSynthesis.onvoiceschanged = () => {
+        const v = pickTaiwanVoice();
+        if (v) log(`偵測到語音: ${v.name} (${v.lang}, local=${v.localService})`);
+      };
+    }
+
+    function speakQuestion() {
+      if (!('speechSynthesis' in window)) {
+        log('錯誤：此瀏覽器不支援 speechSynthesis');
+        return;
+      }
+      window.speechSynthesis.cancel();
+
+      const utterance = new SpeechSynthesisUtterance(questionText);
+      utterance.lang = 'zh-TW';
+      utterance.rate = 1.0;
+
+      const voice = pickTaiwanVoice();
+      if (voice) {
+        utterance.voice = voice;
+        log(`開始朗讀，使用語音：${voice.name} (${voice.lang})`);
+      } else {
+        log('開始朗讀，使用系統預設語音 (zh-TW)');
+      }
+
+      utterance.onstart = () => log('語音播放中...');
+      utterance.onend = () => log('語音朗讀完畢（麥克風持續錄音中，請客戶回答後按「錄音完畢」）');
+      utterance.onerror = (e) => log(`語音播放錯誤: ${e.error}`);
+
+      currentUtterance = utterance;
+      window.speechSynthesis.speak(utterance);
+    }
+
+    btnStart.addEventListener('click', async () => {
+      logBox.textContent = '初始化中...';
+      resultBox.classList.remove('show');
+      if (audioPlayer.src) {
+        URL.revokeObjectURL(audioPlayer.src);
+        audioPlayer.removeAttribute('src');
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        log('錯誤：無法存取麥克風。請確認網址為 HTTPS 或 localhost！');
+        alert('無法存取麥克風，請確認網頁是透過 HTTPS 或 localhost 開啟。');
+        return;
+      }
+
+      try {
+        // 先同步喚醒一次 speechSynthesis，避免 iPad 權限彈窗後失去點擊手勢
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+        }
+
+        // 關閉回音消除與降噪，盡量讓麥克風能側錄到喇叭播出的 AI 聲音
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: true
+          }
+        });
+        log('已取得麥克風權限（echoCancellation: false）');
+
+        if ('wakeLock' in navigator) {
+          try {
+            wakeLock = await navigator.wakeLock.request('screen');
+            log('已啟用螢幕常亮 (Wake Lock)');
+          } catch (err) {
+            log(`Wake Lock 未啟用: ${err.message}`);
+          }
+        }
+
+        recordedChunks = [];
+        selectedMimeType = getSupportedMimeType();
+        const options = selectedMimeType ? { mimeType: selectedMimeType } : undefined;
+        mediaRecorder = new MediaRecorder(micStream, options);
+
+        log(`錄音啟動，格式: ${mediaRecorder.mimeType || '瀏覽器預設'}`);
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            recordedChunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          const finalType = mediaRecorder.mimeType || selectedMimeType || 'audio/mp4';
+          const blob = new Blob(recordedChunks, { type: finalType });
+          const url = URL.createObjectURL(blob);
+          const ext = finalType.includes('mp4') || finalType.includes('aac') ? 'm4a' : 'webm';
+          const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
+
+          audioPlayer.src = url;
+          downloadLink.href = url;
+          downloadLink.download = `recording-test.${ext}`;
+          resultBox.classList.add('show');
+
+          log(`錄音已結束：時長約 ${durationSec} 秒，檔案大小 ${(blob.size / 1024).toFixed(1)} KB (${finalType})`);
+          setStatus('錄音完成', false);
+        };
+
+        startTime = Date.now();
+        mediaRecorder.start(1000);
+
+        btnStart.disabled = true;
+        btnReread.disabled = false;
+        btnStop.disabled = false;
+        setStatus('錄音進行中（AI 導讀＋現場收音）', true);
+
+        speakQuestion();
+      } catch (err) {
+        log(`啟動失敗: ${err.name} - ${err.message}`);
+        alert(`無法啟動錄音：${err.message}`);
+      }
+    });
+
+    btnReread.addEventListener('click', () => {
+      speakQuestion();
+    });
+
+    btnStop.addEventListener('click', async () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        micStream = null;
+      }
+      if (wakeLock) {
+        try {
+          await wakeLock.release();
+          wakeLock = null;
+        } catch (_) {}
+      }
+
+      btnStart.disabled = false;
+      btnReread.disabled = true;
+      btnStop.disabled = true;
+    });
+  </script>
+</body>
+</html>
