@@ -321,16 +321,22 @@
           const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
 
           audioPlayer.src = url;
+          audioPlayer.load();
           downloadLink.href = url;
           downloadLink.download = `recording-test.${ext}`;
           resultBox.classList.add('show');
 
-          log(`錄音已結束：時長約 ${durationSec} 秒，檔案大小 ${(blob.size / 1024).toFixed(1)} KB (${finalType})`);
+          if (micStream) {
+            micStream.getTracks().forEach(track => track.stop());
+            micStream = null;
+          }
+
+          log(`錄音已結束：分段數 ${recordedChunks.length}，時長約 ${durationSec} 秒，檔案大小 ${(blob.size / 1024).toFixed(1)} KB (${finalType})`);
           setStatus('錄音完成', false);
         };
 
         startTime = Date.now();
-        mediaRecorder.start(1000);
+        mediaRecorder.start();
 
         btnStart.disabled = true;
         btnReread.disabled = false;
@@ -354,8 +360,7 @@
       }
       if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop();
-      }
-      if (micStream) {
+      } else if (micStream) {
         micStream.getTracks().forEach(track => track.stop());
         micStream = null;
       }
